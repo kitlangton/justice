@@ -8,6 +8,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "bench": "bun scripts/bench.ts",
+    "bench:rich": "bun scripts/bench-rich.ts",
+    "size": "bun scripts/size.ts",
     "build": "bun scripts/build-package.ts",
     "check:release": "bun run typecheck && bun run test && bun run build",
     "site": "bun run --cwd site dev",

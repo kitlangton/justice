@@ -9,7 +9,7 @@ paragraph-wide cost, rather than greedily line by line. Justice keeps the ideas
 that matter for screen typography — cubic strain, four line-fitness classes with
 an adjacency penalty, hyphen penalties, and an emergency-stretch second pass —
 and drops the parts that only make sense for a batch typesetter. The result is a
-core of about 4 KB minified.
+core of about 4 KB gzipped.
 
 ```sh
 bun add @kitlangton/justice
@@ -55,6 +55,10 @@ for (const line of layout.lines) {
   so abrupt spacing changes between neighbouring lines cost extra.
 - **Static output.** `@kitlangton/justice/static` precomputes break plans across
   a range of measures and coalesces them into bands for build-time rendering.
+- **Rich inline text.** The optional `@kitlangton/justice/rich` entry retains
+  links, bold, italic, and arbitrary nested marks across breaks and hyphenation.
+  Supply shaped word measurements and render explicit uniform gaps. Try the
+  browser example at `/rich.html` with `bun run site`.
 
 The full API — options, hyphenation, optical margins, the rendering contract,
 and static compilation — is documented in
@@ -62,10 +66,11 @@ and static compilation — is documented in
 
 ## Scope
 
-Horizontal LTR, single-font, space-delimited plain text. Pass each paragraph
-and hard-break segment separately. Rich inline markup, CJK break rules, bidi
-layout, and variable-font expansion are out of scope. Requires an ECMAScript
-2022 runtime with `Intl.Segmenter`.
+Horizontal LTR, space-delimited text. Use `prepare` for plain text or the optional
+rich adapter for styled runs with explicit uniform interword gaps. Pass each
+paragraph and hard-break segment separately. HTML/Markdown parsing, inline images,
+CJK break rules, bidi layout, and variable-font expansion are out of scope.
+Requires an ECMAScript 2022 runtime with `Intl.Segmenter`.
 
 ## Develop
 
@@ -74,12 +79,15 @@ bun install
 bun run typecheck
 bun run test      # exhaustive-partition oracles for whole-word and hyphenated layouts
 bun run bench     # solver timing on synthetic advances
+bun run bench:rich # preparation, resizing, and rich line extraction timings
 bun run build     # compiles packages/justice/dist
+bun run size      # minified, gzip, and Brotli bytes per built entry
 bun run site      # the site, at http://127.0.0.1:5173
 ```
 
-`src/engine.ts` is the solver; `src/static.ts` is the build-time band compiler.
-Both are packaged from `packages/justice`.
+`src/engine.ts` is the solver; `src/static.ts` is the build-time band compiler;
+`src/rich.ts` is the optional inline formatting adapter. All are packaged from
+`packages/justice`.
 
 `site/` is [justice.kitlangton.com](https://justice.kitlangton.com): a Vite
 app that imports the engine source directly and sets each example paragraph

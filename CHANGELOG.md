@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Add the opt-in `@kitlangton/justice/rich` entry with `prepareRich` and `lineRuns`.
+  Preserve opaque inline marks through whole-word and hyphenated line breaks,
+  measure complete styled fragments, and cache repeated measurements by text and
+  mark identity. Interword gaps use an explicit uniform advance.
+- Add a browser example with links and nested formatting, rich-text regression
+  tests, and repeatable preparation/rendering benchmarks and bundle-size reports.
+- Keep one native anchor per source link across visual lines in the browser
+  example; remove synchronized hover handlers and underline workarounds.
+- Speed up ASCII grapheme counting and prune impossible hyphenated line
+  candidates, preserving Unicode validation and the selected optimal layout.
+  No runtime dependencies were added.
+
 ## 0.3.2
 
 - Bound emergency-fitting credit by the number of word spaces on each line.

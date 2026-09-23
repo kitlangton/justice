@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Links, emphasis, and nested inline formatting, composed with Justice." />
+    <title>Rich text — Justice</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <style>
+      :root { color-scheme: dark; background: #111; color: #e2e2e2; --serif: "EB Garamond Variable", Garamond, Georgia, serif; --paragraph-font: 22px/1.45 var(--serif); font-family: var(--serif); font-synthesis: style; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      main { max-width: 1280px; margin: auto; padding: 28px clamp(24px, 6vw, 88px) 80px; }
+      nav, .label, label, output, footer { font: 13px/1.6 "Helvetica Neue", Helvetica, sans-serif; }
+      nav { display: flex; justify-content: space-between; }
+      nav a { color: #e2e2e2; text-decoration: none; }
+      a { color: #dbba8c; text-decoration-thickness: 1px; text-underline-offset: .14em; }
+      a:hover { color: #f0d8b8; }
+      :focus-visible { outline: 2px solid #dbba8c; outline-offset: 4px; }
+      header { max-width: 610px; margin: 80px 0 42px; }
+      h1 { margin: 0 0 16px; font-size: clamp(42px, 6vw, 68px); line-height: 1; font-weight: 400; letter-spacing: -.035em; }
+      header p { color: #aaa; font-size: 23px; line-height: 1.35; margin: 0; }
+      .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 32px; }
+      input { width: min(210px, 45vw); accent-color: #dbba8c; }
+      output { color: #aaa; min-width: 50px; font-variant-numeric: tabular-nums; }
+      .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
+      section { min-width: 0; }
+      .label { color: #999; margin: 0 0 18px; }
+      .text { font: var(--paragraph-font); font-kerning: normal; font-variant-ligatures: none; font-optical-sizing: auto; }
+      .sample { width: min(100%, var(--measure, 420px)); }
+      #source { margin: 0; text-align: justify; }
+      #composed { margin: 0; white-space: pre; }
+      .gap { font: var(--paragraph-font); }
+      .generated { user-select: none; -webkit-user-select: none; }
+      code { font: .73em ui-monospace, "SF Mono", Menlo, monospace; color: #ccc; }
+      .small-caps { font-variant-caps: small-caps; }
+      .accent { color: #dbba8c; }
+      .measure-host { position: absolute; left: -100000px; top: 0; visibility: hidden; white-space: pre; }
+      .measure-host > span { display: block; width: max-content; }
+      footer { color: #888; max-width: 650px; border-top: 1px solid #333; margin-top: 48px; padding-top: 20px; }
+      @media (max-width: 720px) { header { margin-top: 56px; } .columns { grid-template-columns: 1fr; gap: 40px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav aria-label="Main"><a href="/">Justice</a><a href="https://github.com/kitlangton/justice">GitHub ↗</a></nav>
+      <header><h1>A little more character.</h1><p>The same paragraph, with its links and emphasis intact. Change the measure to see every line find its place.</p></header>
+      <div class="controls"><label for="width">Column width</label><input id="width" type="range" min="220" max="540" value="420" step="1" /><output id="width-value" for="width">420 px</output></div>
+      <div class="columns">
+        <section aria-labelledby="justice-label"><h2 id="justice-label" class="label">Justice · rich text</h2><p id="composed" class="sample text"></p></section>
+        <section aria-labelledby="source-label"><h2 id="source-label" class="label">Browser · original markup</h2><p id="source" class="sample text">“Good typography,” <strong>someone once said, <em>is invisible</em></strong>. But a paragraph is rarely just plain text. It has <a href="https://github.com/kitlangton/justice">links that carry the reader from one thought to another, even when they run across several lines</a>, <em>quiet emphasis</em>, and the occasional <code>inline code</code>. Justice keeps <u>the details</u>: nested <a href="https://github.com/kitlangton/justice#readme"><strong>bold links</strong></a>, <span class="small-caps">small capitals</span>, and <span class="accent">a change of color</span>. Even typ<strong>ogra</strong>phy can change style inside a word. Well-considered line breaks give these different voices the same measured rhythm, without separating Mr.&nbsp;Smith or losing their meaning.</p></section>
+      </div>
+      <footer>Text is measured once after the font loads. Changing the width reuses those measurements. Links remain ordinary links; emphasis remains ordinary HTML.</footer>
+    </main>
+    <div id="measure" class="measure-host text" aria-hidden="true"></div>
+    <script type="module" src="/src/rich.ts"></script>
+  </body>
+</html>

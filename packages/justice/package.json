@@ -19,6 +19,11 @@
       "import": "./dist/engine.js",
       "default": "./dist/engine.js"
     },
+    "./rich": {
+      "types": "./dist/rich.d.ts",
+      "import": "./dist/rich.js",
+      "default": "./dist/rich.js"
+    },
     "./static": {
       "types": "./dist/static.d.ts",
       "import": "./dist/static.js",

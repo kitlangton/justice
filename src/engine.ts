@@ -104,6 +104,10 @@ export interface Layout {
 }
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+// Words exclude ASCII whitespace, so ASCII fragments cannot contain the CRLF
+// pair that would otherwise make two ASCII code units share one grapheme.
+const ascii = (text: string) => !/[^\x00-\x7f]/.test(text);
+const charactersIn = (text: string) => ascii(text) ? text.length : [...graphemes.segment(text)].length;
 
 /** Measure once; reuse the prepared paragraph across widths and policy changes.
  * ASCII whitespace collapses; NBSP remains inside an indivisible word.
@@ -136,7 +140,7 @@ export function prepare(text: string, measure: (text: string) => number): Prepar
     const quote = word.match(/^[“‘"'«‹]/u)?.[0];
     if (quote) startHangs[i] = Math.min(w, widthOf(quote));
     widths[i + 1] = widths[i] + w;
-    characters[i + 1] = characters[i] + Array.from(graphemes.segment(word)).length;
+    characters[i + 1] = characters[i] + charactersIn(word);
     const explicit = explicitHyphens(word);
     if (explicit.length) {
       hyphenation ??= [];
@@ -164,7 +168,7 @@ function fragments(word: string, wordWidth: number, offsets: readonly number[], 
     const text = word.slice(offsets[from], offsets[to]), cell = from * n + to;
     widths[cell] = from === 0 && to === n - 1 ? wordWidth : widthOf(text);
     if (to < n - 1) hyphenWidths[cell] = explicit[to] ? widths[cell] : widthOf(text + "-");
-    characters[cell] = [...graphemes.segment(text)].length;
+    characters[cell] = charactersIn(text);
   }
   return { offsets, widths, hyphenWidths, characters, explicit: explicit.some(Boolean) ? explicit : undefined };
 }
@@ -183,10 +187,10 @@ export function withHyphenation(p: Prepared,
     const parts = hyphenate(word, index);
     if (!parts.length || parts.some(part => !part.length) || parts.join("") !== word) throw new RangeError("Hyphenation must partition the source word");
     if (parts.length === 1) return existing;
-    const boundaries = new Set([...graphemes.segment(word)].map(part => part.index));
+    const boundaries = ascii(word) ? undefined : new Set([...graphemes.segment(word)].map(part => part.index));
     const offsets = [0];
     for (const part of parts) offsets.push(offsets.at(-1)! + part.length);
-    if (offsets.slice(1, -1).some(offset => !boundaries.has(offset))) throw new RangeError("Hyphenation must not split a grapheme");
+    if (boundaries && offsets.slice(1, -1).some(offset => !boundaries.has(offset))) throw new RangeError("Hyphenation must not split a grapheme");
     const explicitAt = new Set(existing?.offsets.filter((offset, i) => existing.explicit?.[i]) ?? []);
     const merged = [...new Set([...offsets, ...explicitAt])].sort((a, b) => a - b);
     const cache = new Map<string, number>();
@@ -390,11 +394,12 @@ export function solve(p: Prepared, measure: Measure, policy: Partial<Options> = 
         // Prefix costs are nonnegative. Allow the largest possible opening
         // credit and the widest measure before ruling out all earlier starts.
         const overflowBound = line.residual + (s.widest - line.width) + maxOpening - line.opening;
-        // All earlier overflowing candidates are tight: compare only that state,
-        // never the best of other fitness classes that future lines may need.
-        let bestTight = Infinity;
-        for (let l = 0; l < s.lines; l++) bestTight = Math.min(bestTight, costs[end * s.states + l * s.fitnesses]);
-        if (monotone && overflowBound < -0.01 && ((!emergency && o.mode === "balanced" && o.emergencyStretch > 0) || 1 + overflowCost(overflowBound, o.mode) >= bestTight)) break;
+        // Earlier overflows are tight. They must lose at EVERY target line index;
+        // a cheap history at another index can face different widths next.
+        // Infinity prevents cost pruning until each target has a tight path.
+        let worstTight = 0;
+        for (let l = 0; l < s.lines; l++) worstTight = Math.max(worstTight, costs[end * s.states + s.next(l) * s.fitnesses]);
+        if (monotone && overflowBound < -0.01 && ((!emergency && o.mode === "balanced" && o.emergencyStretch > 0) || 1 + overflowCost(overflowBound, o.mode) >= worstTight)) break;
       }
       if (anyFinite(costs, end * s.states, s.states)) reachable[count++] = end;
     }
@@ -445,6 +450,23 @@ function solveHyphenated(p: Prepared, widths: readonly number[], o: Options): La
   const costs = new Float64Array(nodes.length * s.states), previous = new Int32Array(costs.length);
   let candidates = 0, emergency = false;
   const scratch = blank();
+  // At a whole-word boundary every earlier start adds a suffix and a gap.
+  // Only prune if those additions cannot shrink the compressed line.
+  let monotone = p.space * (1 - o.shrink) >= o.tracking, maxOpening = 0;
+  for (let word = 0; word < p.words.length; word++) {
+    const parts = p.hyphenation![word];
+    const optical = p.startProtrusions?.[word];
+    maxOpening = Math.max(maxOpening, optical === undefined ? p.startHangs[word] * o.opening : optical * o.protrusion);
+    if (!(p.widths[word + 1] - p.widths[word] >= (p.characters[word + 1] - p.characters[word]) * o.tracking)) monotone = false;
+    if (parts) {
+      const n = parts.offsets.length;
+      for (let from = 1; from < n - 1; from++) {
+        const cell = from * n + n - 1;
+        if (!(parts.widths[cell] >= parts.characters[cell] * o.tracking)) monotone = false;
+        maxOpening = Math.max(maxOpening, (parts.startProtrusions?.[from] ?? 0) * o.protrusion);
+      }
+    }
+  }
   const fragment = (word: number, from: number, to: number | undefined, hyphen: boolean) => {
     const prepared = p.hyphenation![word];
     if (!prepared) return { width: p.widths[word + 1] - p.widths[word], chars: p.characters[word + 1] - p.characters[word] };
@@ -485,10 +507,11 @@ function solveHyphenated(p: Prepared, widths: readonly number[], o: Options): La
     emergency = pass === 1;
     costs.fill(Infinity); costs[s.origin] = 0;
     for (let end = 1; end < nodes.length; end++) for (let start = end - 1; start >= 0; start--) {
+      let line: Line | undefined;
       for (let l = 0; l < s.lines; l++) {
         const base = start * s.states + l * s.fitnesses;
         if (!anyFinite(costs, base, s.fitnesses)) continue;
-        const line = candidate(start, end, s.width(l));
+        line = candidate(start, end, s.width(l));
         candidates++;
         const target = end * s.states + s.next(l) * s.fitnesses + (s.fitnesses === 4 ? line.fitness! : 0);
         for (let fitness = 0; fitness < s.fitnesses; fitness++) {
@@ -497,6 +520,15 @@ function solveHyphenated(p: Prepared, widths: readonly number[], o: Options): La
           if (cost < costs[target]) { costs[target] = cost; previous[target] = source; }
         }
       }
+      if (!monotone || !line || nodes[start].offset) continue;
+      // Earlier starts contain this entire line plus a suffix, gaps, and whole
+      // words. Their compressed additions are nonnegative; individual fragments
+      // need not grow monotonically. Bound every measure and opening allowance.
+      const overflowBound = line.residual + (s.widest - line.width) + maxOpening - line.opening;
+      // Each target line index must already have a cheaper tight history.
+      let worstTight = 0;
+      for (let l = 0; l < s.lines; l++) worstTight = Math.max(worstTight, costs[end * s.states + s.next(l) * s.fitnesses]);
+      if (overflowBound < -0.01 && ((!emergency && o.mode === "balanced" && o.emergencyStretch > 0) || 1 + overflowCost(overflowBound, o.mode) >= worstTight)) break;
     }
     if (anyFinite(costs, (nodes.length - 1) * s.states, s.states)) break;
   }

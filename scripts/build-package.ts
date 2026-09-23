@@ -16,8 +16,8 @@ await build({
 });
 await build({
   absWorkingDir: root,
-  entryPoints: ["src/static.ts"],
-  outfile: "packages/justice/dist/static.js",
+  entryPoints: ["src/static.ts", "src/rich.ts"],
+  outdir: "packages/justice/dist",
   bundle: true,
   external: ["./engine.js"],
   minify: true,
