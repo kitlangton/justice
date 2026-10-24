@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0
+
+- `prepare` accepts styled runs, `[{ text, style }]`, as well as plain text.
+  Words may span runs; each piece is measured with its run's style, and the
+  measurement cache is keyed by style and text, so one word in two fonts gets
+  two widths. Plain-text calls are unchanged.
+- `Prepared.starts` records each word's UTF-16 offset in the source text, so a
+  renderer can map lines, gaps, and hyphenated breaks back onto its own markup.
+- Add the `lines` option: `lines: 6` sets exactly six lines and
+  `lines: "ragged"` as many as a first-fit ragged setting, like TeX's
+  `\looseness`. Callers no longer re-solve at narrower widths to keep a
+  paragraph's height, so the reported spacing is for the width they render at.
+- Add `@kitlangton/justice/english`: `hyphenate` and `hyphenator(options)`,
+  Liang's algorithm with TeX's American English patterns and exceptions
+  (hyph-utf8), as a separate entry the core never imports.
+- Cost pruning with per-line measures compares an overfull candidate against
+  every line index it could land on, not the cheapest one. Thanks to the
+  analysis in #1 for spotting this.
+
 ## 0.3.2
 
 - Bound emergency-fitting credit by the number of word spaces on each line.

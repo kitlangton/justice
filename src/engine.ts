@@ -30,6 +30,10 @@ export interface Options {
   finalHyphenPenalty: number;
   /** Cost of breaking after a hyphen already present in the source ("well-known"). */
   explicitHyphenPenalty: number;
+  /** Set exactly this many lines (TeX's \looseness, as a count), or as many as
+   * the paragraph takes set ragged, so justifying it never moves what follows.
+   * A count the paragraph can't fill returns the unconstrained optimum. */
+  lines?: number | "ragged";
 }
 
 export const defaults: Options = {
@@ -53,6 +57,9 @@ export interface Prepared {
   startProtrusions?: Float64Array;
   endProtrusions?: Float64Array;
   space: number;
+  /** UTF-16 offset of each word in the source text (the runs joined), so a
+   * caller can map lines and gaps back onto its own markup. */
+  starts?: readonly number[];
   /** Optional measured discretionary breaks; ordinary words retain the fast path. */
   hyphenation?: readonly (WordFragments | undefined)[];
 }
@@ -105,45 +112,73 @@ export interface Layout {
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
+/** A styled piece of a paragraph. Words may span runs; each piece is measured
+ * with its run's style. */
+export interface Run<S = unknown> {
+  text: string;
+  style?: S;
+}
+
 /** Measure once; reuse the prepared paragraph across widths and policy changes.
- * ASCII whitespace collapses; NBSP remains inside an indivisible word.
+ * Pass plain text, or styled runs whose joined text is the paragraph. Measurements
+ * are cached by style and text. ASCII whitespace collapses and may break; NBSP
+ * stays inside an indivisible word, so use it for runs that must not wrap.
+ * Spaces take the style of the paragraph's first space.
  * Pass each hard-break-delimited segment separately.
  */
-export function prepare(text: string, measure: (text: string) => number): Prepared {
-  const words = text.trim().split(/[ \t\r\n\f]+/).filter(Boolean);
+export function prepare<S = undefined>(input: string | readonly Run<S>[], measure: (text: string, style: S | undefined) => number): Prepared {
+  const runs = typeof input === "string" ? [{ text: input } as Run<S>] : input;
+  const text = runs.map(run => run.text).join("");
+  const ends: number[] = [];
+  for (const run of runs) ends.push((ends.at(-1) ?? 0) + run.text.length);
+  const matches = [...text.matchAll(/[^ \t\r\n\f]+/g)];
+  const words = matches.map(match => match[0]);
+  const starts = matches.map(match => match.index);
   const widths = new Float64Array(words.length + 1);
   const characters = new Float64Array(words.length + 1);
   const endHangs = new Float64Array(words.length);
   const startHangs = new Float64Array(words.length);
-  const cache = new Map<string, number>();
-  const widthOf = (text: string) => {
+  const caches = new Map<S | undefined, Map<string, number>>();
+  const piece = (text: string, style: S | undefined) => {
+    let cache = caches.get(style);
+    if (!cache) caches.set(style, cache = new Map());
     let w = cache.get(text);
     if (w === undefined) {
-      w = measure(text);
+      w = measure(text, style);
       if (!Number.isFinite(w) || w < 0) throw new RangeError("Invalid measured word width");
       cache.set(text, w);
     }
     return w;
   };
-  const space = widthOf(" ");
+  const styleAt = (offset: number) => runs[ends.findIndex(end => end > offset)]?.style;
+  // Source text [from, to), one shaped piece per run; a generated hyphen joins the last piece.
+  const widthOf = (from: number, to: number, hyphen = false) => {
+    let w = 0;
+    for (let r = 0, start = 0; start < to; start = ends[r++]) {
+      const a = Math.max(from, start), b = Math.min(to, ends[r]);
+      if (a < b) w += piece(text.slice(a, b) + (hyphen && b === to ? "-" : ""), runs[r].style);
+    }
+    return w;
+  };
+  const space = piece(" ", styleAt(words.length > 1 ? starts[0] + words[0].length : 0));
   if (space <= 0) throw new RangeError("Space width must be positive");
   let hyphenation: (WordFragments | undefined)[] | undefined;
   for (let i = 0; i < words.length; i++) {
-    const word = words[i];
-    const w = widthOf(word);
+    const word = words[i], start = starts[i], end = start + word.length;
+    const w = widthOf(start, end);
     const punctuation = word.match(/[.,;:!?…’”'"]+$/u)?.[0];
-    if (punctuation) endHangs[i] = Math.min(w, widthOf(punctuation));
+    if (punctuation) endHangs[i] = Math.min(w, widthOf(end - punctuation.length, end));
     const quote = word.match(/^[“‘"'«‹]/u)?.[0];
-    if (quote) startHangs[i] = Math.min(w, widthOf(quote));
+    if (quote) startHangs[i] = Math.min(w, widthOf(start, start + quote.length));
     widths[i + 1] = widths[i] + w;
     characters[i + 1] = characters[i] + Array.from(graphemes.segment(word)).length;
     const explicit = explicitHyphens(word);
     if (explicit.length) {
       hyphenation ??= [];
-      hyphenation[i] = fragments(word, w, [0, ...explicit, word.length], new Set(explicit), widthOf);
+      hyphenation[i] = fragments(word, w, [0, ...explicit, word.length], new Set(explicit), (a, b, hyphen) => widthOf(start + a, start + b, hyphen));
     }
   }
-  const p: Prepared = { words, widths, characters, endHangs, startHangs, space };
+  const p: Prepared = { words, widths, characters, endHangs, startHangs, space, starts };
   if (hyphenation) { hyphenation.length = words.length; p.hyphenation = hyphenation; }
   return p;
 }
@@ -156,15 +191,15 @@ function explicitHyphens(word: string): number[] {
 }
 
 function fragments(word: string, wordWidth: number, offsets: readonly number[], explicitAt: ReadonlySet<number>,
-  widthOf: (text: string) => number): WordFragments {
+  widthOf: (from: number, to: number, hyphen?: boolean) => number): WordFragments {
   const n = offsets.length;
   const widths = new Float64Array(n * n), hyphenWidths = new Float64Array(n * n), characters = new Float64Array(n * n);
   const explicit = offsets.map(offset => explicitAt.has(offset));
   for (let from = 0; from < n - 1; from++) for (let to = from + 1; to < n; to++) {
-    const text = word.slice(offsets[from], offsets[to]), cell = from * n + to;
-    widths[cell] = from === 0 && to === n - 1 ? wordWidth : widthOf(text);
-    if (to < n - 1) hyphenWidths[cell] = explicit[to] ? widths[cell] : widthOf(text + "-");
-    characters[cell] = [...graphemes.segment(text)].length;
+    const cell = from * n + to;
+    widths[cell] = from === 0 && to === n - 1 ? wordWidth : widthOf(offsets[from], offsets[to]);
+    if (to < n - 1) hyphenWidths[cell] = explicit[to] ? widths[cell] : widthOf(offsets[from], offsets[to], true);
+    characters[cell] = [...graphemes.segment(word.slice(offsets[from], offsets[to]))].length;
   }
   return { offsets, widths, hyphenWidths, characters, explicit: explicit.some(Boolean) ? explicit : undefined };
 }
@@ -199,7 +234,7 @@ export function withHyphenation(p: Prepared,
       }
       return width;
     };
-    return fragments(word, p.widths[index + 1] - p.widths[index], merged, explicitAt, widthOf);
+    return fragments(word, p.widths[index + 1] - p.widths[index], merged, explicitAt, (from, to, hyphen) => widthOf(word.slice(from, to) + (hyphen ? "-" : "")));
   });
   return { ...p, hyphenation };
 }
@@ -232,8 +267,9 @@ export function withOpticalMargins(p: Prepared,
 function validate(measure: Measure, o: Options): readonly number[] {
   const widths = typeof measure === "number" ? [measure] : measure;
   if (!widths.length || widths.some(width => !Number.isFinite(width) || width <= 0)) throw new RangeError("Measure must be positive");
-  const { mode, ending, ...numeric } = o;
+  const { mode, ending, lines, ...numeric } = o;
   if (mode !== "balanced" && mode !== "strict") throw new RangeError("Unknown fitting mode");
+  if (lines !== undefined && lines !== "ragged" && !(Number.isInteger(lines) && lines > 0)) throw new RangeError("Invalid line count");
   if (ending !== "soft" && ending !== "fit") throw new RangeError("Unknown ending model");
   for (const value of Object.values(numeric)) {
     if (!Number.isFinite(value) || value < 0) throw new RangeError("Policy values must be finite and nonnegative");
@@ -329,11 +365,24 @@ function finish(line: Line, p: Prepared, o: Options): Line {
 }
 
 /** Dynamic-programming state per break: which measure the next line takes
- * (line index, clamped once widths repeat) × the finished line's fitness class. */
-function shape(widths: readonly number[], o: Options) {
-  const fitnesses = o.adjacentPenalty ? 4 : 1, lines = widths.length;
+ * (line index, clamped once widths repeat) × the finished line's fitness class.
+ * A target line count keeps every index up to the target unclamped, so the
+ * final break must close exactly that many lines. */
+function shape(widths: readonly number[], o: Options, target = 0) {
+  const fitnesses = o.adjacentPenalty ? 4 : 1, lines = target ? target + 1 : widths.length;
   return { fitnesses, lines, states: fitnesses * lines, origin: fitnesses === 4 ? 1 : 0,
-    width: (l: number) => widths[l], next: (l: number) => Math.min(l + 1, lines - 1), widest: Math.max(...widths) };
+    open: target || lines, final: target * fitnesses, finals: target ? fitnesses : fitnesses * lines,
+    width: (l: number) => widths[Math.min(l, widths.length - 1)], next: (l: number) => Math.min(l + 1, lines - 1), widest: Math.max(...widths) };
+}
+
+/** The requested line count, or 0 for none or one the paragraph's breaks can't fill.
+ * "ragged" counts a first-fit, whole-word setting at natural spacing: text-align: left. */
+function target(p: Prepared, widths: readonly number[], o: Options, breaks: number): number {
+  let lines = o.lines === "ragged" ? 0 : o.lines ?? 0;
+  if (o.lines === "ragged") for (let start = 0, end = 1; start < p.words.length; lines++, start = end++) {
+    while (end < p.words.length && p.widths[end + 1] - p.widths[start] + (end - start) * p.space <= widths[Math.min(lines, widths.length - 1)]) end++;
+  }
+  return lines <= breaks ? lines : 0;
 }
 
 /** Exact optimum within the first viable pass: ordinary fitting, then relaxed
@@ -343,7 +392,7 @@ export function solve(p: Prepared, measure: Measure, policy: Partial<Options> = 
   const widths = validate(measure, o);
   if (p.hyphenation?.some(Boolean)) return solveHyphenated(p, widths, o);
   const n = p.words.length;
-  const s = shape(widths, o);
+  const s = shape(widths, o, target(p, widths, o, n));
   const costs = new Float64Array((n + 1) * s.states).fill(Infinity);
   const previous = new Int32Array(costs.length);
   // Keep reachable prefix boundaries in source order. Scanning backward
@@ -371,7 +420,7 @@ export function solve(p: Prepared, measure: Measure, policy: Partial<Options> = 
       for (let index = count - 1; index >= 0; index--) {
         const start = reachable[index];
         let line: Line | undefined;
-        for (let l = 0; l < s.lines; l++) {
+        for (let l = 0; l < s.open; l++) {
           const base = start * s.states + l * s.fitnesses;
           if (!anyFinite(costs, base, s.fitnesses)) continue;
           line = fit(p, start, end, s.width(l), o, scratch, emergency);
@@ -392,16 +441,18 @@ export function solve(p: Prepared, measure: Measure, policy: Partial<Options> = 
         const overflowBound = line.residual + (s.widest - line.width) + maxOpening - line.opening;
         // All earlier overflowing candidates are tight: compare only that state,
         // never the best of other fitness classes that future lines may need.
-        let bestTight = Infinity;
-        for (let l = 0; l < s.lines; l++) bestTight = Math.min(bestTight, costs[end * s.states + l * s.fitnesses]);
-        if (monotone && overflowBound < -0.01 && ((!emergency && o.mode === "balanced" && o.emergencyStretch > 0) || 1 + overflowCost(overflowBound, o.mode) >= bestTight)) break;
+        // A history at one line index can't stand in for another, which faces
+        // different measures or a different count of lines to go.
+        let tight = 0;
+        for (let l = Math.min(1, s.lines - 1); l < s.lines && l <= end; l++) tight = Math.max(tight, costs[end * s.states + l * s.fitnesses]);
+        if (monotone && overflowBound < -0.01 && ((!emergency && o.mode === "balanced" && o.emergencyStretch > 0) || 1 + overflowCost(overflowBound, o.mode) >= tight)) break;
       }
       if (anyFinite(costs, end * s.states, s.states)) reachable[count++] = end;
     }
-    if (anyFinite(costs, n * s.states, s.states)) break;
+    if (anyFinite(costs, n * s.states + s.final, s.finals)) break;
   }
   const lines: Line[] = [];
-  const terminal = cheapest(costs, n * s.states);
+  const terminal = cheapest(costs, n * s.states + s.final, s.finals);
   for (let slot = terminal; slot >= s.states;) {
     const source = previous[slot], start = Math.floor(source / s.states), end = Math.floor(slot / s.states);
     const line = { ...fit(p, start, end, s.width(Math.floor(source % s.states / s.fitnesses)), o, scratch, emergency) };
@@ -417,9 +468,9 @@ function anyFinite(costs: Float64Array, from: number, count: number): boolean {
   return false;
 }
 
-function cheapest(costs: Float64Array, from: number): number {
+function cheapest(costs: Float64Array, from: number, count: number): number {
   let best = from;
-  for (let i = from + 1; i < costs.length; i++) if (costs[i] < costs[best]) best = i;
+  for (let i = from + 1; i < from + count; i++) if (costs[i] < costs[best]) best = i;
   return best;
 }
 
@@ -441,7 +492,7 @@ function solveHyphenated(p: Prepared, widths: readonly number[], o: Options): La
     prepared?.offsets.slice(1, -1).forEach((offset, index) => nodes.push({ word, part: index + 1, offset, explicit: prepared.explicit?.[index + 1] ?? false }));
     nodes.push({ word: word + 1, part: 0, offset: 0, explicit: false });
   });
-  const s = shape(widths, o);
+  const s = shape(widths, o, target(p, widths, o, nodes.length - 1));
   const costs = new Float64Array(nodes.length * s.states), previous = new Int32Array(costs.length);
   let candidates = 0, emergency = false;
   const scratch = blank();
@@ -485,7 +536,7 @@ function solveHyphenated(p: Prepared, widths: readonly number[], o: Options): La
     emergency = pass === 1;
     costs.fill(Infinity); costs[s.origin] = 0;
     for (let end = 1; end < nodes.length; end++) for (let start = end - 1; start >= 0; start--) {
-      for (let l = 0; l < s.lines; l++) {
+      for (let l = 0; l < s.open; l++) {
         const base = start * s.states + l * s.fitnesses;
         if (!anyFinite(costs, base, s.fitnesses)) continue;
         const line = candidate(start, end, s.width(l));
@@ -498,10 +549,10 @@ function solveHyphenated(p: Prepared, widths: readonly number[], o: Options): La
         }
       }
     }
-    if (anyFinite(costs, (nodes.length - 1) * s.states, s.states)) break;
+    if (anyFinite(costs, (nodes.length - 1) * s.states + s.final, s.finals)) break;
   }
   const lines: Line[] = [];
-  const terminal = cheapest(costs, (nodes.length - 1) * s.states);
+  const terminal = cheapest(costs, (nodes.length - 1) * s.states + s.final, s.finals);
   for (let slot = terminal; slot >= s.states;) {
     const source = previous[slot], start = Math.floor(source / s.states), end = Math.floor(slot / s.states);
     const line = { ...candidate(start, end, s.width(Math.floor(source % s.states / s.fitnesses))) };

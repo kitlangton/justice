@@ -16,6 +16,16 @@ await build({
 });
 await build({
   absWorkingDir: root,
+  entryPoints: ["src/english.ts"],
+  outfile: "packages/justice/dist/english.js",
+  bundle: true,
+  minify: true,
+  format: "esm",
+  platform: "neutral",
+  target: "es2022",
+});
+await build({
+  absWorkingDir: root,
   entryPoints: ["src/static.ts"],
   outfile: "packages/justice/dist/static.js",
   bundle: true,

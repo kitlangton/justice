@@ -28,7 +28,46 @@ for (const line of layout.lines) {
 widths and policy changes. `solve` returns line boundaries, spacing adjustments,
 optical allowances, residuals, costs, and a candidate count. Positive residuals
 are underfilled; negative residuals are overfull. `defaults` and the `Options`,
-`Measure`, `Prepared`, `Line`, and `Layout` types are exported.
+`Measure`, `Run`, `Prepared`, `Line`, and `Layout` types are exported.
+
+## Styled runs
+
+```ts
+const prepared = prepare([
+  { text: "Run " },
+  { text: "bun\u00a0run\u00a0check", style: "code" }, // NBSP: this run never wraps
+  { text: " before you push." },
+], (text, style) => measureTextWidth(text, style === "code" ? mono : sans))
+```
+
+Pass runs instead of a string to mix fonts, links, or inline code in one
+paragraph. Their joined text is the paragraph: ASCII whitespace may break, and a
+word may span runs ("`code`," is one word). Each piece of a word is measured
+with its own run's `style`, and measurements are cached by style and text, so
+the same word in two fonts gets two widths. Interword spaces take the style of
+the paragraph's first space. Use NBSP for spaces that must not wrap.
+
+`prepared.starts[i]` is the UTF-16 offset of word `i` in the joined text, so a
+renderer can map breaks back onto its own markup. A line covers
+`starts[line.start] + (line.startOffset ?? 0)` to
+`starts[line.end - 1] + (line.endOffset ?? words[line.end - 1].length)`; the
+whitespace after word `i` ends at `starts[i + 1]`.
+
+## Line count
+
+```ts
+solve(prepared, 620, { lines: "ragged" }) // as many lines as text-align: left
+solve(prepared, 620, { lines: 6 })        // exactly six
+```
+
+Paragraph-wide fitting can set a paragraph in fewer lines than the browser's
+ragged setting, which moves everything after it. `lines` asks for the best layout
+with exactly that many lines, like TeX's `\looseness`, at the width you render
+at, so the reported spacing and residuals need no correction. `"ragged"` counts a
+first-fit, whole-word setting at natural spacing. A count the paragraph can't
+fill (more lines than break opportunities) returns the unconstrained optimum;
+check `layout.lines.length`. Fewer lines than fit naturally are set overfull and
+reported through negative residuals.
 
 ## Per-line measures
 
@@ -72,6 +111,26 @@ boundaries; NBSP-containing tokens always remain indivisible. No dictionary is
 bundled into the numerical core. Measurement receives `(fragment, wordIndex)` so
 an adapter can use the corresponding word's font. It measures complete shaped
 fragments **including their hyphen**, rather than adding isolated glyph widths.
+With styled runs, hyphenate only words set in one style (find a word's run from
+`prepared.starts[index]`) and return `[word]` for the rest.
+
+### English
+
+```ts
+import { hyphenate, hyphenator } from "@kitlangton/justice/english"
+
+withHyphenation(prepared, hyphenate, measureTextWidth)
+withHyphenation(prepared, hyphenator({ minWord: 8, left: 3, right: 3 }), measureTextWidth)
+```
+
+A separate entry, about 17 KB gzipped, that the core never imports: Liang's
+algorithm with TeX's American English patterns and exception list (hyph-utf8's
+`hyph-en-us`, by Gerard D.C. Kuiken, free to copy with its notice, which the
+entry keeps). `hyphenate` uses TeX's limits: words of five letters or more, two
+letters before a break and three after. Leading and trailing punctuation stays
+on the edge fragments, and each letter run between source hyphens or apostrophes
+is hyphenated on its own. Words with digits, symbols, inner capitals (code,
+acronyms, URLs) or non-ASCII letters stay whole.
 
 Whole-word and discretionary breaks compete in the same fitting pass. The
 optional path searches the expanded break graph without overflow pruning;
@@ -184,9 +243,9 @@ Measure and render with the same kerning and ligature settings so the measured
 words compose predictably.
 
 Process paragraphs and explicit hard-break segments separately. Supported input
-is horizontal LTR, single-font, space-delimited plain text, with optional supplied
-hyphenation and supplied glyph-specific optical margins. Rich inline markup and bidi/CJK breaking are
-outside this version's scope.
+is horizontal LTR, space-delimited text, plain or as styled runs, with optional
+supplied hyphenation and supplied glyph-specific optical margins. Parsing markup
+and bidi/CJK breaking are outside this version's scope.
 
 The core can execute during SSR or a Cloudflare build/Worker request when supplied
 matching measurements and a known width. Font measurement, responsive-width

@@ -1,6 +1,6 @@
 {
   "name": "@kitlangton/justice",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "A small, DOM-free paragraph justification engine.",
   "homepage": "https://justice.kitlangton.com",
   "repository": {
@@ -23,6 +23,11 @@
       "types": "./dist/static.d.ts",
       "import": "./dist/static.js",
       "default": "./dist/static.js"
+    },
+    "./english": {
+      "types": "./dist/english.d.ts",
+      "import": "./dist/english.js",
+      "default": "./dist/english.js"
     }
   },
   "files": [

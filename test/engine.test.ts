@@ -5,11 +5,11 @@ const measure = (text: string) => Array.from(text).reduce((n, c) => n + (c === "
 
 // Enumerate every partition independently. This oracle deliberately has no pruning,
 // prefix sums, or dynamic programming, so unsafe early exits cannot hide in both.
-function exhaustive(p: Prepared, measure_: Measure, o: Options, emergency = false): number {
+function exhaustive(p: Prepared, measure_: Measure, o: Options, emergency = false, count?: number): number {
   const widths = typeof measure_ === "number" ? [measure_] : measure_;
   let best = Infinity;
   function visit(start: number, total: number, previousFitness = 1, line = 0) {
-    if (start === p.words.length) { best = Math.min(best, total); return; }
+    if (start === p.words.length) { if (count === undefined || line === count) best = Math.min(best, total); return; }
     const width = widths[Math.min(line, widths.length - 1)];
     for (let end = start + 1; end <= p.words.length; end++) {
       const text = p.words.slice(start, end).join(" ");
@@ -53,7 +53,7 @@ function exhaustive(p: Prepared, measure_: Measure, o: Options, emergency = fals
     }
   }
   visit(0, 0);
-  return best === Infinity && !emergency ? exhaustive(p, measure_, o, true) : best;
+  return best === Infinity && !emergency ? exhaustive(p, measure_, o, true, count) : best;
 }
 
 describe("Justice's layout contract", () => {
@@ -191,6 +191,46 @@ describe("Justice's layout contract", () => {
     expect(calls).toBe(3);
     solve(p, 40); solve(p, 100); solve(p, 80, { stretch: 1 });
     expect(calls).toBe(3);
+  });
+  it("finds the exhaustive optimum among layouts with exactly the requested number of lines", () => {
+    let seed = 11;
+    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
+    for (let i = 0; i < 300; i++) {
+      const text = Array.from({ length: 2 + Math.floor(random() * 8) }, () => "w".repeat(1 + Math.floor(random() * 12)) + ["", "", ".", ","][Math.floor(random() * 4)]).join(" ");
+      const p = prepare(text, measure);
+      const widths = i % 3 ? 30 + Math.floor(random() * 250) : Array.from({ length: 1 + Math.floor(random() * 3) }, () => 30 + Math.floor(random() * 200));
+      const count = 1 + Math.floor(random() * p.words.length);
+      const o: Options = { ...defaults, mode: i % 2 ? "strict" : "balanced", emergencyStretch: i % 4 ? random() * 0.2 : 0, stretch: random() * 2, shrink: random(), tracking: random(), lastLine: random(), adjacentPenalty: i % 5 ? 100 : 0 };
+      const result = solve(p, widths, { ...o, lines: count });
+      expect(result.lines.length, `case ${i}`).toBe(count);
+      expect(result.cost, `case ${i}`).toBeCloseTo(exhaustive(p, widths, o, false, count), 5);
+      expect(result.lines.map(l => lineText(p, l)).join(" ")).toBe(text);
+    }
+  });
+  it("keeps a paragraph's ragged line count, reporting spacing for the width it renders at", () => {
+    const text = "Justice picks every break in a paragraph together, so a justified paragraph can need fewer lines than the same text set ragged, which moves everything below it on the page.";
+    const p = prepare(text, measure);
+    const width = 320;
+    const free = solve(p, width, { tracking: 0 });
+    const ragged = solve(p, width, { tracking: 0, lines: "ragged" });
+    // Greedy first fit at natural spacing: what a browser sets with text-align: left.
+    let count = 0;
+    for (let start = 0; start < p.words.length; count++) {
+      let end = start + 1;
+      while (end < p.words.length && measure(p.words.slice(start, end + 1).join(" ")) <= width) end++;
+      start = end;
+    }
+    expect(free.lines.length).toBe(count - 1);
+    expect(ragged.lines.length).toBe(count);
+    expect(solve(p, width, { tracking: 0, lines: count }).lines).toEqual(ragged.lines);
+    for (const line of ragged.lines.slice(0, -1)) {
+      expect(line.width).toBe(width);
+      expect(line.residual).toBe(0);
+      expect(line.natural + line.wordSpacing * (line.end - line.start - 1)).toBeCloseTo(width + line.hanging + line.opening, 8);
+    }
+    // More lines than words can't be set; the unconstrained optimum is returned and its length reports that.
+    expect(solve(p, width, { lines: 1000 })).toEqual(solve(p, width));
+    for (const lines of [0, -1, 1.5, NaN, "loose"]) expect(() => solve(p, width, { lines: lines as number })).toThrow(RangeError);
   });
   it("handles empty paragraphs and rejects invalid dimensions or policies", () => {
     const p = prepare(" \n\t", measure);

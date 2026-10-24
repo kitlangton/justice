@@ -8,7 +8,7 @@ type Optical = (text: string, index: number) => { start: number; end: number };
 
 // Enumerate partitions over source offsets, independently of the engine's word
 // matrices and dynamic-programming nodes. Measure each displayed line directly.
-function exhaustive(text: string, width: number, o: Options, emergency = false, optical?: Optical): number {
+function exhaustive(text: string, width: number, o: Options, emergency = false, optical?: Optical, count?: number): number {
   const breaks = [{ end: 0, next: 0, hyphen: false }];
   for (const match of text.matchAll(/[^ ]+/g)) {
     const parts = split(match[0]);
@@ -21,8 +21,8 @@ function exhaustive(text: string, width: number, o: Options, emergency = false, 
     breaks.push({ end, next: Math.min(text.length, end + 1), hyphen: false });
   }
   let best = Infinity;
-  function visit(start: number, total: number, previousFitness = 1) {
-    if (start === breaks.length - 1) { best = Math.min(best, total); return; }
+  function visit(start: number, total: number, previousFitness = 1, lines = 0) {
+    if (start === breaks.length - 1) { if (count === undefined || lines === count) best = Math.min(best, total); return; }
     for (let end = start + 1; end < breaks.length; end++) {
       const a = breaks[start], b = breaks[end];
       const visible = text.slice(a.next, b.end) + (b.hyphen ? "-" : "");
@@ -65,11 +65,11 @@ function exhaustive(text: string, width: number, o: Options, emergency = false, 
       cost += b.hyphen ? o.hyphenPenalty + (a.hyphen ? o.consecutiveHyphenPenalty : 0)
         : last && a.hyphen ? o.finalHyphenPenalty : 0;
       if (start && Math.abs(fitness - previousFitness) > 1) cost += o.adjacentPenalty;
-      visit(end, total + cost, fitness);
+      visit(end, total + cost, fitness, lines + 1);
     }
   }
   visit(0, 0);
-  return best === Infinity && !emergency ? exhaustive(text, width, o, true, optical) : best;
+  return best === Infinity && !emergency ? exhaustive(text, width, o, true, optical, count) : best;
 }
 
 describe("optional hyphenation", () => {
@@ -98,6 +98,22 @@ describe("optional hyphenation", () => {
         }
       }
       expect(source).toBe(text);
+    }
+  });
+
+  it("matches exhaustive partitions with exactly the requested number of lines", () => {
+    let seed = 23;
+    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
+    for (let i = 0; i < 60; i++) {
+      const text = Array.from({ length: 2 + i % 3 }, () => "a".repeat(3 + Math.floor(random() * 7))).join(" ");
+      const width = 30 + random() * 150;
+      const p = withHyphenation(prepare(text, measure), split, measure);
+      const breaks = p.words.length + p.hyphenation!.reduce((n, f) => n + (f ? f.offsets.length - 2 : 0), 0);
+      const count = 1 + Math.floor(random() * Math.min(5, breaks));
+      const o: Options = { ...defaults, mode: i % 2 ? "strict" : "balanced", tracking: random(), shrink: random() };
+      const result = solve(p, width, { ...o, lines: count });
+      expect(result.lines.length, `case ${i}`).toBe(count);
+      expect(result.cost, `case ${i}`).toBeCloseTo(exhaustive(text, width, o, false, undefined, count), 5);
     }
   });
 

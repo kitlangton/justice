@@ -18,6 +18,7 @@ const changelog = await Bun.file(`${root}CHANGELOG.md`).text();
 const types = [
   `// @kitlangton/justice\n${await Bun.file(`${root}packages/justice/dist/engine.d.ts`).text()}`,
   `// @kitlangton/justice/static\n${await Bun.file(`${root}packages/justice/dist/static.d.ts`).text()}`,
+  `// @kitlangton/justice/english\n${await Bun.file(`${root}packages/justice/dist/english.d.ts`).text()}`,
 ].join("\n");
 const site = "https://justice.kitlangton.com";
 
