@@ -5,8 +5,11 @@
   "homepage": "https://justice.kitlangton.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kitlangton/justice.git",
+    "url": "git+https://github.com/anomalyco/justice.git",
     "directory": "packages/justice"
+  },
+  "bugs": {
+    "url": "https://github.com/anomalyco/justice/issues"
   },
   "type": "module",
   "license": "MIT",
